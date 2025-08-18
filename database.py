@@ -4,6 +4,7 @@ from sqlalchemy.orm import sessionmaker
 import hashlib
 import json
 from datetime import datetime, timedelta
+import sqlite3
 
 Base = declarative_base()
 
@@ -22,25 +23,46 @@ class ScrapedData(Base):
 
 def init_db():
     engine = create_engine('sqlite:///scraped_data.db')
+    
+    # Check if the database exists and needs migration
+    migrate_database(engine)
+    
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine)
+
+def migrate_database(engine):
+    """Handle database schema migrations"""
+    try:
+        # Check if timestamp column exists
+        with engine.connect() as conn:
+            result = conn.execute("PRAGMA table_info(scraped_data)")
+            columns = [row[1] for row in result]
+            
+            if 'timestamp' not in columns:
+                # Migrate to new schema
+                conn.execute("ALTER TABLE scraped_data ADD COLUMN timestamp DATETIME")
+                conn.execute("UPDATE scraped_data SET timestamp = datetime('now')")
+                
+    except Exception as e:
+        # Table doesn't exist yet, will be created automatically
+        pass
 
 def save_data(url, data):
     Session = init_db()
     session = Session()
     
-    # Check if data exists and is recent (within 24 hours)
+    # Check if data exists and is recent
     data_id = hashlib.sha256(url.encode()).hexdigest()
     existing = session.query(ScrapedData).filter_by(id=data_id).first()
     
-    if existing and (datetime.utcnow() - existing.timestamp) < timedelta(hours=24):
+    if existing:
         # Update existing record
         existing.data = json.dumps(data)
         existing.timestamp = datetime.utcnow()
     else:
         # Create new record
         new_entry = ScrapedData(url, data)
-        session.merge(new_entry)
+        session.add(new_entry)
     
     session.commit()
     session.close()
